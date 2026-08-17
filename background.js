@@ -19,6 +19,85 @@ const TEST_TIMEOUT_MS = 7000;
 // (кандидат ещё не сохранён и не активен, поэтому обычный activeId-флоу их не знает)
 let pendingTest = null; // { host, port, username, password }
 
+let proxyLock = Promise.resolve();
+
+function withProxyLock(task) {
+  const run = proxyLock.then(task, task);
+  proxyLock = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
+function isSafePacToken(value) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 253 &&
+    !/["\\\n\r]/.test(value)
+  );
+}
+
+function escapePacString(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function normalizeCountryCode(value) {
+  const code = String(value || "").toUpperCase();
+  return /^[A-Z]{2}$/.test(code) ? code : "";
+}
+
+function isPublicLookupHost(host) {
+  if (!host) return false;
+  const h = String(host).toLowerCase();
+  if (h === "localhost" || h.endsWith(".localhost")) return false;
+  if (h === "127.0.0.1" || h === "::1") return false;
+  if (/^(10\.|192\.168\.|169\.254\.)/.test(h)) return false;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return false;
+  return true;
+}
+
+function normalizeProxyInput(raw) {
+  if (!raw || typeof raw !== "object") {
+    throw new Error("Invalid proxy");
+  }
+  const scheme = raw.scheme === "https" ? "https" : raw.scheme === "http" ? "http" : "";
+  if (!scheme) {
+    throw new Error("Only http and https schemes are supported");
+  }
+  const host = String(raw.host || "").trim();
+  const port = Number(raw.port);
+  if (!host || !isSafePacToken(host) || /[\s/]/.test(host)) {
+    throw new Error("Invalid host");
+  }
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("Invalid port");
+  }
+  return {
+    id: raw.id ? String(raw.id) : crypto.randomUUID(),
+    scheme,
+    host,
+    port,
+    username: String(raw.username || ""),
+    password: String(raw.password || ""),
+    name: String(raw.name || host),
+    countryCode: normalizeCountryCode(raw.countryCode),
+  };
+}
+
+async function refreshConflictState() {
+  try {
+    const details = await chrome.proxy.settings.get({});
+    const conflict = details.levelOfControl !== "controlled_by_this_extension";
+    await chrome.storage.local.set({ [STORAGE_KEY_CONFLICT]: conflict });
+    return conflict;
+  } catch (err) {
+    console.warn("[OneClick Proxy] refreshConflictState failed:", err);
+    return false;
+  }
+}
+
 async function getProxies() {
   const { [STORAGE_KEY_PROXIES]: proxies = [] } = await chrome.storage.local.get(STORAGE_KEY_PROXIES);
   return proxies;
@@ -76,13 +155,13 @@ function proxyKey(proxy) {
 
 function parseDomainLines(text) {
   return String(text || "")
-    .split("\n")
+    .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("#"));
+    .filter((line) => line && !line.startsWith("#") && isSafePacToken(line));
 }
 
 function patternToPacCondition(pattern) {
-  const escaped = pattern.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const escaped = escapePacString(pattern);
   if (pattern.includes("*")) {
     return `shExpMatch(host, "${escaped}")`;
   }
@@ -116,7 +195,10 @@ function hostMatchesBypassPattern(host, pattern) {
   if (/^[\d.a-fA-F:]+$/.test(normalizedPattern)) {
     return normalizedHost === normalizedPattern;
   }
-  return normalizedHost === normalizedPattern;
+  return (
+    normalizedHost === normalizedPattern ||
+    dnsDomainIs(normalizedHost, `.${normalizedPattern}`)
+  );
 }
 
 function hostMatchesPattern(host, pattern) {
@@ -138,7 +220,9 @@ function hostMatchesPattern(host, pattern) {
 
 function wouldUseProxyForHost(host, rules, patterns) {
   if (!host) return true;
-  if (host === "localhost" || host === "127.0.0.1") return false;
+  if (host === "localhost" || host === "127.0.0.1" || host === "[::1]" || !host.includes(".")) {
+    return false;
+  }
 
   const matchesPattern =
     rules.mode === "bypass"
@@ -175,24 +259,33 @@ async function getActiveTabHost(tabId = null) {
     return null;
   }
 }
-function buildPacScript(proxy, rules, patterns) {
+function proxyPacTarget(proxy) {
+  const host =
+    proxy.host.includes(":") && !proxy.host.startsWith("[") ? `[${proxy.host}]` : proxy.host;
   const directive = proxy.scheme === "https" ? "HTTPS" : "PROXY";
-  const proxyStr = `${directive} ${proxy.host}:${proxy.port}`;
+  return `${directive} ${escapePacString(host)}:${Number(proxy.port)}`;
+}
+
+function buildPacScript(proxy, rules, patterns) {
+  if (!isSafePacToken(proxy.host)) {
+    throw new Error("Invalid proxy host");
+  }
+  const proxyStr = proxyPacTarget(proxy);
   const conditions = patterns.map(patternToPacCondition).filter(Boolean);
   const matchExpr = conditions.length ? conditions.join(" || ") : "false";
+  const localDirect = `host === "localhost" || host === "127.0.0.1" || host === "[::1]" || isPlainHostName(host)`;
 
   if (rules.mode === "whitelist") {
     return `function FindProxyForURL(url, host) {
-  if (host === "localhost" || host === "127.0.0.1") return "DIRECT";
+  if (${localDirect}) return "DIRECT";
   if (${matchExpr}) return "${proxyStr}";
   return "DIRECT";
 }`;
   }
 
-  const bypassExpr = conditions.length ? conditions.join(" || ") : "false";
   return `function FindProxyForURL(url, host) {
-  if (host === "localhost" || host === "127.0.0.1") return "DIRECT";
-  if (${bypassExpr}) return "DIRECT";
+  if (${localDirect}) return "DIRECT";
+  if (${matchExpr}) return "DIRECT";
   return "${proxyStr}";
 }`;
 }
@@ -207,21 +300,7 @@ async function applyProxy(proxy) {
   const rules = await getRules();
   const patterns = parseDomainLines(rules.domains);
 
-  if (rules.mode === "bypass" && patterns.length > 0) {
-    await chrome.proxy.settings.set({
-      value: {
-        mode: "fixed_servers",
-        rules: {
-          singleProxy: { scheme: proxy.scheme, host: proxy.host, port: proxy.port },
-          bypassList: ["localhost", "127.0.0.1", ...patterns],
-        },
-      },
-      scope: "regular",
-    });
-    return;
-  }
-
-  if (rules.mode === "whitelist") {
+  if (rules.mode === "whitelist" || patterns.length > 0) {
     const pac = buildPacScript(proxy, rules, patterns);
     await chrome.proxy.settings.set({
       value: { mode: "pac_script", pacScript: { data: pac } },
@@ -235,7 +314,7 @@ async function applyProxy(proxy) {
       mode: "fixed_servers",
       rules: {
         singleProxy: { scheme: proxy.scheme, host: proxy.host, port: proxy.port },
-        bypassList: ["localhost", "127.0.0.1"],
+        bypassList: ["<local>", "localhost", "127.0.0.1", "[::1]"],
       },
     },
     scope: "regular",
@@ -257,15 +336,21 @@ async function restoreRealProxyState() {
 // Через PAC-скрипт заворачивает в прокси ТОЛЬКО тестовый хост,
 // весь остальной трафик пользователя в это время идёт напрямую — не мешаем работе.
 async function applyPacForTest(proxy, targetHosts = [TEST_HOST]) {
-  const directive = proxy.scheme === "https" ? "HTTPS" : "PROXY";
-  const hosts = targetHosts;
+  if (!isSafePacToken(proxy.host)) {
+    throw new Error("Invalid proxy host");
+  }
+  const proxyStr = proxyPacTarget(proxy);
+  const hosts = targetHosts.filter(isSafePacToken);
   const matchExpr = hosts
-    .map((host) => `host === "${host}" || dnsDomainIs(host, ".${host}")`)
+    .map((host) => {
+      const escaped = escapePacString(host);
+      return `host === "${escaped}" || dnsDomainIs(host, ".${escaped}")`;
+    })
     .join(" || ");
   const pac = `
     function FindProxyForURL(url, host) {
-      if (${matchExpr}) {
-        return "${directive} ${proxy.host}:${proxy.port}";
+      if (${matchExpr || "false"}) {
+        return "${proxyStr}";
       }
       return "DIRECT";
     }
@@ -277,13 +362,14 @@ async function applyPacForTest(proxy, targetHosts = [TEST_HOST]) {
 }
 
 async function lookupCountryByHost(host) {
+  if (!isPublicLookupHost(host)) return null;
   try {
     const res = await fetch(`${GEO_URL}${encodeURIComponent(host)}`, {
       signal: AbortSignal.timeout(4000),
     });
     const data = await res.json();
     if (data.success && data.country_code) {
-      return String(data.country_code).toUpperCase();
+      return normalizeCountryCode(data.country_code);
     }
   } catch (err) {
     console.warn("[OneClick Proxy] country lookup failed for", host, err);
@@ -327,7 +413,7 @@ async function fetchGstaticProxyLatency(proxy) {
       cache: "no-store",
       signal: AbortSignal.timeout(PING_TIMEOUT_MS),
     });
-    return { ok: true, latencyMs: Math.round(performance.now() - start) };
+      return { ok: true, latencyMs: Math.round(performance.now() - start) };
   } catch (err) {
     const elapsed = Math.round(performance.now() - start);
     if (err.name === "AbortError" || err.name === "TimeoutError") {
@@ -337,8 +423,6 @@ async function fetchGstaticProxyLatency(proxy) {
       return { ok: true, latencyMs: elapsed };
     }
     return { ok: false, error: "failed" };
-  } finally {
-    pendingTest = null;
   }
 }
 
@@ -346,6 +430,7 @@ async function measureProxyLatency(proxy) {
   try {
     return await fetchGstaticProxyLatency(proxy);
   } finally {
+    pendingTest = null;
     await restoreRealProxyState();
   }
 }
@@ -354,13 +439,9 @@ async function pingAllProxiesDirect() {
   const proxies = await getProxies();
   if (!proxies.length) return [];
 
-  await restoreRealProxyState();
-  await new Promise((resolve) => setTimeout(resolve, 80));
-
   const results = [];
   try {
     for (const proxy of proxies) {
-      await restoreRealProxyState();
       results.push({ id: proxy.id, ...(await fetchGstaticProxyLatency(proxy)) });
     }
     return results;
@@ -399,7 +480,7 @@ async function testProxyConnectivity(proxy) {
         });
         const geo = await geoRes.json();
         if (geo.success && geo.country_code) {
-          countryCode = String(geo.country_code).toUpperCase();
+          countryCode = normalizeCountryCode(geo.country_code);
         }
       } catch (err) {
         console.warn("[OneClick Proxy] geo lookup through proxy failed:", err);
@@ -602,6 +683,7 @@ async function restoreSession() {
     await applyProxy(null);
     await updateActionIcon("inactive");
   }
+  await refreshConflictState();
 }
 
 async function syncIconFromStorage() {
@@ -631,22 +713,34 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
   }
 });
 
-chrome.runtime.onStartup.addListener(restoreSession);
-chrome.runtime.onInstalled.addListener(restoreSession);
+chrome.runtime.onStartup.addListener(() => {
+  withProxyLock(restoreSession).catch((err) => {
+    console.warn("[OneClick Proxy] restoreSession onStartup failed:", err);
+  });
+});
+chrome.runtime.onInstalled.addListener(() => {
+  withProxyLock(restoreSession).catch((err) => {
+    console.warn("[OneClick Proxy] restoreSession onInstalled failed:", err);
+  });
+});
 
 chrome.proxy.settings.onChange.addListener((details) => {
   const conflict = details.levelOfControl !== "controlled_by_this_extension";
   chrome.storage.local.set({ [STORAGE_KEY_CONFLICT]: conflict });
 });
 
-chrome.commands.onCommand.addListener(async (command) => {
+chrome.commands.onCommand.addListener((command) => {
   if (command !== "toggle-proxy") return;
-  const activeId = await getActiveId();
-  if (activeId) {
-    await deactivate();
-    return;
-  }
-  await togglePower(true);
+  withProxyLock(async () => {
+    const activeId = await getActiveId();
+    if (activeId) {
+      await deactivate();
+      return;
+    }
+    await togglePower(true);
+  }).catch((err) => {
+    console.warn("[OneClick Proxy] toggle-proxy command failed:", err);
+  });
 });
 
 // --- Авторизация на прокси ---
@@ -689,7 +783,26 @@ chrome.webRequest.onAuthRequired.addListener(
 
 // --- Сообщения от popup.js ---
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  (async () => {
+  if (sender.id && sender.id !== chrome.runtime.id) {
+    sendResponse({ ok: false, error: "forbidden" });
+    return false;
+  }
+
+  const PROXY_LOCK_TYPES = new Set([
+    "setPrimary",
+    "togglePower",
+    "testAndAddProxy",
+    "updateProxy",
+    "deleteProxy",
+    "activateProxy",
+    "deactivate",
+    "saveRules",
+    "pingProxy",
+    "pingAllProxies",
+    "importData",
+  ]);
+
+  const handle = async () => {
     try {
       switch (message.type) {
       case "getState": {
@@ -717,44 +830,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       }
       case "testAndAddProxy": {
-        const result = await testProxyConnectivity(message.proxy);
+        const proxy = normalizeProxyInput(message.proxy);
+        const result = await testProxyConnectivity(proxy);
         if (!result.ok) {
           sendResponse({ ok: false, error: result.error });
           break;
         }
-        try {
-          const proxy = { ...message.proxy };
-          if (result.countryCode) {
-            proxy.countryCode = result.countryCode;
-          }
-          const proxies = await addProxy(proxy);
-          sendResponse({ ok: true, proxies });
-        } catch (err) {
-          sendResponse({ ok: false, error: err.message });
+        if (result.countryCode) {
+          proxy.countryCode = result.countryCode;
         }
+        const proxies = await addProxy(proxy);
+        sendResponse({ ok: true, proxies });
         break;
       }
       case "updateProxy": {
-        const result = await testProxyConnectivity(message.proxy);
+        const proxy = normalizeProxyInput({ ...message.proxy, id: message.id });
+        const result = await testProxyConnectivity(proxy);
         if (!result.ok) {
           sendResponse({ ok: false, error: result.error });
           break;
         }
-        try {
-          const proxy = { ...message.proxy };
-          if (result.countryCode) {
-            proxy.countryCode = result.countryCode;
-          }
-          const proxies = await updateProxy(message.id, proxy);
-          sendResponse({
-            ok: true,
-            proxies,
-            activeId: await getActiveId(),
-            primaryId: await getPrimaryId(),
-          });
-        } catch (err) {
-          sendResponse({ ok: false, error: err.message });
+        if (result.countryCode) {
+          proxy.countryCode = result.countryCode;
         }
+        const proxies = await updateProxy(message.id, proxy);
+        sendResponse({
+          ok: true,
+          proxies,
+          activeId: await getActiveId(),
+          primaryId: await getPrimaryId(),
+        });
         break;
       }
       case "deleteProxy": {
@@ -839,24 +944,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: false, error: "Invalid file" });
           break;
         }
-        const proxies = payload.proxies.map((p) => ({
-          id: p.id || crypto.randomUUID(),
-          scheme: p.scheme === "https" ? "https" : "http",
-          host: String(p.host || ""),
-          port: Number(p.port) || 80,
-          username: String(p.username || ""),
-          password: String(p.password || ""),
-          name: String(p.name || p.host || ""),
-          countryCode: p.countryCode ? String(p.countryCode).toUpperCase() : "",
-        })).filter((p) => p.host);
-
         const seen = new Set();
         const unique = [];
-        for (const p of proxies) {
-          const key = proxyKey(p);
-          if (seen.has(key)) continue;
-          seen.add(key);
-          unique.push(p);
+        for (const raw of payload.proxies) {
+          try {
+            const proxy = normalizeProxyInput(raw);
+            const key = proxyKey(proxy);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            unique.push(proxy);
+          } catch {
+            continue;
+          }
         }
 
         await saveProxies(unique);
@@ -896,6 +995,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       console.error("[OneClick Proxy] message handler error:", message?.type, err);
       sendResponse({ ok: false, error: err.message || "Internal error" });
     }
-  })();
+  };
+
+  const run = PROXY_LOCK_TYPES.has(message?.type) ? withProxyLock(handle) : handle();
+  run.catch((err) => {
+    console.error("[OneClick Proxy] message handler failed:", message?.type, err);
+    try {
+      sendResponse({ ok: false, error: err.message || "Internal error" });
+    } catch {
+      // popup already closed
+    }
+  });
   return true; // ответ асинхронный
 });

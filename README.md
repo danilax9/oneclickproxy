@@ -12,6 +12,12 @@ Chrome extension for fast HTTP/HTTPS proxy switching with authentication.
 - Export and import settings as JSON
 - Hotkey: `Alt+Shift+P`
 
+## Privacy
+
+Proxy credentials stay in local Chrome storage. See the [Privacy Policy](PRIVACY.md) required for Chrome Web Store listing.
+
+Chrome Web Store submission copy and permission justifications: [STORE.md](STORE.md).
+
 ## Install
 
 1. Download the latest release ZIP from [Releases](https://github.com/danilax9/oneclickproxy/releases)
@@ -59,6 +65,7 @@ To add more users later, run the same command again on the server — the script
 ```
 https://user:pass@proxy.example.com:3128
 http://proxy.example.com:8080
+http://user:pass@[2001:db8::1]:3128
 ```
 
 Supported schemes: `http` and `https`.

@@ -24,7 +24,7 @@
     </div>
 
     <div class="topbar">
-      <button class="icon-btn icon-btn--ghost" id="openSettingsBtn" title="Settings">
+      <button type="button" class="icon-btn icon-btn--ghost" id="openSettingsBtn" title="Settings" aria-label="Settings">
         <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
           <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" stroke="currentColor" stroke-width="2"/>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -34,7 +34,7 @@
       <div class="topbar__status">
         <div class="home__title" id="homeOff">Off</div>
         <div class="home__title home__title--on hidden" id="homeOn">
-          <span class="home__flag-wrap flag-badge">
+          <span class="home__flag-wrap flag-badge hidden" id="homeFlagWrap">
             <img class="home__flag" id="homeFlag" alt="" />
           </span>
           <span class="home__country" id="homeCountry"></span>
@@ -42,7 +42,7 @@
         <div class="home__title home__title--fallback hidden" id="homeFallback">Connected</div>
       </div>
 
-      <button class="icon-btn icon-btn--ghost" id="openAddBtn" title="Add proxy">
+      <button type="button" class="icon-btn icon-btn--ghost" id="openAddBtn" title="Add proxy" aria-label="Add proxy">
         <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
           <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
         </svg>
@@ -50,7 +50,7 @@
     </div>
 
     <div class="home">
-      <button class="power-btn" id="powerBtn">
+      <button type="button" class="power-btn" id="powerBtn" aria-label="Toggle proxy">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
           <path d="M12 3v8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
           <path d="M6.5 6.5a8 8 0 1 0 11 0" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
@@ -62,7 +62,7 @@
   <!-- ЭКРАН: СПИСОК / ВЫБОР ОСНОВНОГО -->
   <section class="screen" data-screen="settings">
     <div class="subheader">
-      <button class="icon-btn icon-btn--ghost" id="backFromSettingsBtn" title="Back">
+      <button type="button" class="icon-btn icon-btn--ghost" id="backFromSettingsBtn" title="Back" aria-label="Back">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
           <path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -94,7 +94,7 @@
             <path d="M5 6h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
           </svg>
         </button>
-        <button class="icon-btn icon-btn--ghost" id="openAddFromSettingsBtn" title="Add proxy">
+        <button class="icon-btn icon-btn--ghost" id="openAddFromSettingsBtn" type="button" title="Add proxy" aria-label="Add proxy">
           <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
             <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
           </svg>
@@ -113,7 +113,7 @@
   <!-- ЭКРАН: ПРАВИЛА -->
   <section class="screen" data-screen="rules">
     <div class="subheader">
-      <button class="icon-btn icon-btn--ghost" id="backFromRulesBtn" title="Back">
+      <button type="button" class="icon-btn icon-btn--ghost" id="backFromRulesBtn" title="Back" aria-label="Back">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
           <path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -150,7 +150,7 @@
   <!-- ЭКРАН: ДОБАВЛЕНИЕ / РЕДАКТИРОВАНИЕ -->
   <section class="screen" data-screen="add">
     <div class="subheader">
-      <button class="icon-btn icon-btn--ghost" id="backFromAddBtn" title="Back">
+      <button type="button" class="icon-btn icon-btn--ghost" id="backFromAddBtn" title="Back" aria-label="Back">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
           <path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -188,7 +188,7 @@
       />
       <p class="form-hint" id="inputHint">Tests the proxy before saving</p>
 
-      <button id="addBtn" class="btn btn--accent btn--block">
+      <button id="addBtn" type="button" class="btn btn--accent btn--block">
         <span class="btn__label">Test & add</span>
         <span class="btn__success hidden" id="addBtnSuccess" aria-hidden="true">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
@@ -229,12 +229,12 @@
       </span>
     </button>
     <div class="item__actions">
-      <button class="item__edit" title="Edit">
+      <button type="button" class="item__edit" title="Edit" aria-label="Edit">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
           <path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
-      <button class="item__delete" title="Delete">
+      <button type="button" class="item__delete" title="Delete" aria-label="Delete">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
           <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>

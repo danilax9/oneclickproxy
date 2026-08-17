@@ -5,6 +5,7 @@ const homeOff = document.getElementById("homeOff");
 const homeOn = document.getElementById("homeOn");
 const homeFallback = document.getElementById("homeFallback");
 const homeFlag = document.getElementById("homeFlag");
+const homeFlagWrap = document.getElementById("homeFlagWrap");
 const homeCountry = document.getElementById("homeCountry");
 const conflictBanner = document.getElementById("conflictBanner");
 const dismissConflictBtn = document.getElementById("dismissConflictBtn");
@@ -310,7 +311,8 @@ function proxyToUrl(proxy) {
     proxy.username || proxy.password
       ? `${encodeURIComponent(proxy.username)}:${encodeURIComponent(proxy.password)}@`
       : "";
-  return `${proxy.scheme}://${auth}${proxy.host}:${proxy.port}`;
+  const host = proxy.host.includes(":") ? `[${proxy.host}]` : proxy.host;
+  return `${proxy.scheme}://${auth}${host}:${proxy.port}`;
 }
 
 function decodeCredential(value) {
@@ -319,6 +321,28 @@ function decodeCredential(value) {
   } catch {
     return value;
   }
+}
+
+function parseHostPort(hostPort) {
+  if (hostPort.startsWith("[")) {
+    const close = hostPort.indexOf("]");
+    if (close === -1 || hostPort[close + 1] !== ":") {
+      throw new Error("Could not parse IPv6 host. Format: scheme://user:pass@[host]:port");
+    }
+    return {
+      host: hostPort.slice(1, close),
+      port: parseInt(hostPort.slice(close + 2), 10),
+    };
+  }
+
+  const colon = hostPort.lastIndexOf(":");
+  if (colon <= 0) {
+    throw new Error("Could not parse string. Format: scheme://user:pass@host:port");
+  }
+  return {
+    host: hostPort.slice(0, colon),
+    port: parseInt(hostPort.slice(colon + 1), 10),
+  };
 }
 
 function parseProxyString(raw) {
@@ -334,26 +358,16 @@ function parseProxyString(raw) {
   }
 
   const rest = trimmed.slice(schemeMatch[0].length);
-  // user:pass@host:port — @ separates credentials from host
-  const withAuth = rest.match(/^(.+)@([^@/]+):(\d+)$/);
-  const withoutAuth = rest.match(/^([^@/]+):(\d+)$/);
+  const at = rest.lastIndexOf("@");
+  const userinfo = at === -1 ? "" : rest.slice(0, at);
+  const hostPort = at === -1 ? rest : rest.slice(at + 1);
+  const { host, port } = parseHostPort(hostPort);
 
-  let userinfo = "";
-  let host = "";
-  let port = 0;
-
-  if (withAuth) {
-    userinfo = withAuth[1];
-    host = withAuth[2];
-    port = parseInt(withAuth[3], 10);
-  } else if (withoutAuth) {
-    host = withoutAuth[1];
-    port = parseInt(withoutAuth[2], 10);
-  } else {
-    throw new Error("Could not parse string. Format: scheme://user:pass@host:port");
-  }
-  if (!host || !Number.isFinite(port)) {
+  if (!host || /[\s/]/.test(host)) {
     throw new Error("Host is required");
+  }
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("Port must be between 1 and 65535");
   }
 
   let username = "";
@@ -375,27 +389,6 @@ function parseProxyString(raw) {
     password,
     name: host,
   };
-}
-
-function isValidProxyString(raw) {
-  try {
-    parseProxyString(raw);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function tryAutofillFromClipboard() {
-  if (editingId || inputEl.value.trim()) return;
-  try {
-    const text = (await navigator.clipboard.readText()).trim();
-    if (!isValidProxyString(text)) return;
-    inputEl.value = text;
-    clearInputHint();
-  } catch {
-    // Clipboard unavailable or access denied — ignore silently.
-  }
 }
 
 function renderConflictBanner() {
@@ -423,11 +416,16 @@ function renderHome() {
   if (flagUrl && countryName) {
     homeFlag.src = flagUrl;
     homeFlag.alt = code;
+    homeFlagWrap.classList.remove("hidden");
     homeCountry.textContent = countryName;
     homeOn.classList.remove("hidden");
     homeFallback.classList.add("hidden");
     return;
   }
+
+  homeFlag.removeAttribute("src");
+  homeFlag.alt = "";
+  homeFlagWrap.classList.add("hidden");
 
   homeOn.classList.add("hidden");
   homeFallback.classList.remove("hidden");
@@ -669,7 +667,6 @@ function openAddScreen(returnScreen = "home") {
   resetAddForm();
   addReturnScreen = returnScreen;
   switchScreen("add");
-  tryAutofillFromClipboard();
 }
 
 function openEditScreen(proxy) {
@@ -786,7 +783,7 @@ exportBtn.addEventListener("click", async () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "proxy-manager-backup.json";
+    a.download = "oneclick-proxy-backup.json";
     a.click();
     URL.revokeObjectURL(url);
   } catch (err) {
