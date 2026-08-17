@@ -23,6 +23,37 @@ Chrome extension for fast HTTP/HTTPS proxy switching with authentication.
 
 > Chrome will show a warning that the extension is not from the Chrome Web Store. This is expected for manual installs.
 
+## Set up your own proxy server
+
+You can deploy a private HTTP/HTTPS proxy on a Linux VPS with [3proxy-install](https://github.com/a0s/3proxy-install). OneClick Proxy works with the HTTP proxy it creates.
+
+**Requirements:** Debian, Ubuntu, Fedora, CentOS, AlmaLinux, Rocky, Oracle Linux, or Arch; root access; outbound internet from the server.
+
+1. SSH into your VPS as root (or use `sudo -i`).
+
+2. Run the installer:
+
+```bash
+bash <(curl -s https://raw.githubusercontent.com/a0s/3proxy-install/master/3proxy-install.sh)
+```
+
+3. Follow the prompts:
+   - Confirm the server public IP
+   - Choose HTTP port (default `3128`) and SOCKS port (default `1080`; not used by OneClick Proxy)
+   - Pick DNS resolvers
+
+4. At the end, the script creates a proxy user and prints credentials in this format:
+
+```
+http://username:password@YOUR_SERVER_IP:3128
+```
+
+5. Copy that URL into OneClick Proxy (Add proxy screen) or paste it from the clipboard.
+
+To add more users later, run the same command again on the server — the script opens a management menu.
+
+> Open the HTTP port you chose (e.g. `3128/tcp`) in your VPS firewall and cloud security group, or the proxy will not be reachable from your browser.
+
 ## Proxy format
 
 ```
