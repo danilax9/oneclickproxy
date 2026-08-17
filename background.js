@@ -10,6 +10,9 @@ const DEFAULT_RULES = { mode: "bypass", domains: "" };
 
 const TEST_URL = "https://www.gstatic.com/generate_204";
 const TEST_HOST = "www.gstatic.com";
+const PING_TIMEOUT_MS = 8000;
+const GEO_URL = "https://ipwho.is/";
+const GEO_HOST = "ipwho.is";
 const TEST_TIMEOUT_MS = 7000;
 
 // Учётные данные, которые нужно выдать ТОЛЬКО во время тестового запроса
@@ -58,6 +61,7 @@ async function reapplyActiveProxy() {
   const proxies = await getProxies();
   const proxy = proxies.find((p) => p.id === activeId) || null;
   await applyProxy(proxy);
+  await syncActionIcon();
 }
 
 function isDuplicateProxy(proxies, proxy, excludeId = null) {
@@ -88,6 +92,89 @@ function patternToPacCondition(pattern) {
   return `(host === "${escaped}" || dnsDomainIs(host, ".${escaped}"))`;
 }
 
+function shExpMatch(str, pattern) {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+  return new RegExp(`^${escaped}$`, "i").test(str);
+}
+
+function dnsDomainIs(host, domain) {
+  const base = domain.startsWith(".") ? domain.slice(1) : domain;
+  return host === base || host.endsWith(`.${base}`);
+}
+
+function hostMatchesBypassPattern(host, pattern) {
+  if (!host || !pattern) return false;
+  const normalizedHost = host.toLowerCase();
+  const normalizedPattern = pattern.toLowerCase();
+
+  if (normalizedPattern.startsWith(".")) {
+    return dnsDomainIs(normalizedHost, normalizedPattern);
+  }
+  if (normalizedPattern.includes("*")) {
+    return shExpMatch(normalizedHost, normalizedPattern);
+  }
+  if (/^[\d.a-fA-F:]+$/.test(normalizedPattern)) {
+    return normalizedHost === normalizedPattern;
+  }
+  return normalizedHost === normalizedPattern;
+}
+
+function hostMatchesPattern(host, pattern) {
+  if (!host || !pattern) return false;
+  const normalizedHost = host.toLowerCase();
+  const normalizedPattern = pattern.toLowerCase();
+
+  if (normalizedPattern.includes("*")) {
+    return shExpMatch(normalizedHost, normalizedPattern);
+  }
+  if (/^[\d.a-fA-F:]+$/.test(normalizedPattern)) {
+    return normalizedHost === normalizedPattern;
+  }
+  return (
+    normalizedHost === normalizedPattern ||
+    dnsDomainIs(normalizedHost, `.${normalizedPattern}`)
+  );
+}
+
+function wouldUseProxyForHost(host, rules, patterns) {
+  if (!host) return true;
+  if (host === "localhost" || host === "127.0.0.1") return false;
+
+  const matchesPattern =
+    rules.mode === "bypass"
+      ? (pattern) => hostMatchesBypassPattern(host, pattern)
+      : (pattern) => hostMatchesPattern(host, pattern);
+
+  if (rules.mode === "whitelist") {
+    if (!patterns.length) return false;
+    return patterns.some(matchesPattern);
+  }
+
+  return !patterns.some(matchesPattern);
+}
+
+async function getTabHost(tab) {
+  if (!tab?.url) return null;
+  if (/^(chrome|chrome-extension|edge|about|devtools):/i.test(tab.url)) return null;
+  try {
+    return new URL(tab.url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+async function getActiveTabHost(tabId = null) {
+  try {
+    if (tabId != null) {
+      return getTabHost(await chrome.tabs.get(tabId));
+    }
+    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    return getTabHost(tabs[0]);
+  } catch (err) {
+    console.warn("[OneClick Proxy] getActiveTabHost failed:", err);
+    return null;
+  }
+}
 function buildPacScript(proxy, rules, patterns) {
   const directive = proxy.scheme === "https" ? "HTTPS" : "PROXY";
   const proxyStr = `${directive} ${proxy.host}:${proxy.port}`;
@@ -169,15 +256,15 @@ async function restoreRealProxyState() {
 
 // Через PAC-скрипт заворачивает в прокси ТОЛЬКО тестовый хост,
 // весь остальной трафик пользователя в это время идёт напрямую — не мешаем работе.
-async function applyPacForTest(proxy) {
-  // Для http-прокси Chrome ожидает директиву "PROXY host:port".
-  // Для https-прокси (TLS-соединение до самого прокси-сервера) — отдельную
-  // директиву "HTTPS host:port". Перепутать их — частая причина ложного
-  // провала теста для валидных https-прокси.
+async function applyPacForTest(proxy, targetHosts = [TEST_HOST]) {
   const directive = proxy.scheme === "https" ? "HTTPS" : "PROXY";
+  const hosts = targetHosts;
+  const matchExpr = hosts
+    .map((host) => `host === "${host}" || dnsDomainIs(host, ".${host}")`)
+    .join(" || ");
   const pac = `
     function FindProxyForURL(url, host) {
-      if (host === "${TEST_HOST}") {
+      if (${matchExpr}) {
         return "${directive} ${proxy.host}:${proxy.port}";
       }
       return "DIRECT";
@@ -189,6 +276,100 @@ async function applyPacForTest(proxy) {
   });
 }
 
+async function lookupCountryByHost(host) {
+  try {
+    const res = await fetch(`${GEO_URL}${encodeURIComponent(host)}`, {
+      signal: AbortSignal.timeout(4000),
+    });
+    const data = await res.json();
+    if (data.success && data.country_code) {
+      return String(data.country_code).toUpperCase();
+    }
+  } catch (err) {
+    console.warn("[OneClick Proxy] country lookup failed for", host, err);
+  }
+  return null;
+}
+
+async function resolveMissingCountries() {
+  const proxies = await getProxies();
+  let changed = false;
+
+  for (const proxy of proxies) {
+    if (proxy.countryCode) continue;
+    const countryCode = await lookupCountryByHost(proxy.host);
+    if (countryCode) {
+      proxy.countryCode = countryCode;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await saveProxies(proxies);
+  }
+  return proxies;
+}
+
+async function fetchGstaticProxyLatency(proxy) {
+  pendingTest = {
+    host: proxy.host,
+    port: proxy.port,
+    username: proxy.username,
+    password: proxy.password,
+  };
+
+  await applyPacForTest(proxy, [TEST_HOST]);
+  const start = performance.now();
+
+  try {
+    await fetch(TEST_URL, {
+      mode: "no-cors",
+      cache: "no-store",
+      signal: AbortSignal.timeout(PING_TIMEOUT_MS),
+    });
+    return { ok: true, latencyMs: Math.round(performance.now() - start) };
+  } catch (err) {
+    const elapsed = Math.round(performance.now() - start);
+    if (err.name === "AbortError" || err.name === "TimeoutError") {
+      return { ok: false, error: "timeout" };
+    }
+    if (elapsed < PING_TIMEOUT_MS) {
+      return { ok: true, latencyMs: elapsed };
+    }
+    return { ok: false, error: "failed" };
+  } finally {
+    pendingTest = null;
+  }
+}
+
+async function measureProxyLatency(proxy) {
+  try {
+    return await fetchGstaticProxyLatency(proxy);
+  } finally {
+    await restoreRealProxyState();
+  }
+}
+
+async function pingAllProxiesDirect() {
+  const proxies = await getProxies();
+  if (!proxies.length) return [];
+
+  await restoreRealProxyState();
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  const results = [];
+  try {
+    for (const proxy of proxies) {
+      await restoreRealProxyState();
+      results.push({ id: proxy.id, ...(await fetchGstaticProxyLatency(proxy)) });
+    }
+    return results;
+  } finally {
+    pendingTest = null;
+    await restoreRealProxyState();
+  }
+}
+
 async function testProxyConnectivity(proxy) {
   pendingTest = {
     host: proxy.host,
@@ -198,7 +379,7 @@ async function testProxyConnectivity(proxy) {
   };
 
   try {
-    await applyPacForTest(proxy);
+    await applyPacForTest(proxy, [TEST_HOST, GEO_HOST]);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
@@ -209,7 +390,26 @@ async function testProxyConnectivity(proxy) {
         cache: "no-store",
         signal: controller.signal,
       });
-      return { ok: true };
+
+      let countryCode = null;
+      try {
+        const geoRes = await fetch(GEO_URL, {
+          cache: "no-store",
+          signal: AbortSignal.timeout(4000),
+        });
+        const geo = await geoRes.json();
+        if (geo.success && geo.country_code) {
+          countryCode = String(geo.country_code).toUpperCase();
+        }
+      } catch (err) {
+        console.warn("[OneClick Proxy] geo lookup through proxy failed:", err);
+      }
+
+      if (!countryCode) {
+        countryCode = await lookupCountryByHost(proxy.host);
+      }
+
+      return { ok: true, countryCode };
     } catch (err) {
       console.warn("[OneClick Proxy] proxy test failed:", proxy.scheme, proxy.host, proxy.port, err);
       if (err.name === "AbortError") {
@@ -230,7 +430,7 @@ async function activateProxy(id) {
   const proxy = proxies.find((p) => p.id === id) || null;
   await applyProxy(proxy);
   await setActiveId(proxy ? proxy.id : null);
-  await updateActionIcon(Boolean(proxy));
+  await syncActionIcon();
   if (proxy) {
     await chrome.storage.local.set({ [STORAGE_KEY_CONFLICT]: false });
   }
@@ -240,7 +440,7 @@ async function activateProxy(id) {
 async function deactivate() {
   await applyProxy(null);
   await setActiveId(null);
-  await updateActionIcon(false);
+  await syncActionIcon();
   return null;
 }
 
@@ -328,10 +528,11 @@ async function togglePower(turnOn) {
 // --- Extension toolbar icon ---
 const ICON_COLORS = {
   inactive: "#B8C4D0",
-  active: "#22C55E",
+  active: "#7890FF",
+  bypassed: "#C8D4FA",
 };
 
-function drawActionIcon(ctx, size, active) {
+function drawActionIcon(ctx, size, state) {
   const cx = size / 2;
   const cy = size / 2;
   const margin = Math.max(1, size * 0.06);
@@ -341,22 +542,42 @@ function drawActionIcon(ctx, size, active) {
 
   ctx.beginPath();
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-  ctx.fillStyle = active ? ICON_COLORS.active : ICON_COLORS.inactive;
+  ctx.fillStyle = ICON_COLORS[state] || ICON_COLORS.inactive;
   ctx.fill();
 }
 
-async function updateActionIcon(active) {
+async function updateActionIcon(state) {
   const sizes = [16, 48, 128];
   const imageData = {};
 
   for (const size of sizes) {
     const canvas = new OffscreenCanvas(size, size);
     const ctx = canvas.getContext("2d");
-    drawActionIcon(ctx, size, active);
+    drawActionIcon(ctx, size, state);
     imageData[size] = ctx.getImageData(0, 0, size, size);
   }
 
   await chrome.action.setIcon({ imageData });
+}
+
+async function syncActionIcon(tabId = null) {
+  const activeId = await getActiveId();
+  if (!activeId) {
+    await updateActionIcon("inactive");
+    return;
+  }
+
+  const rules = await getRules();
+  const patterns = parseDomainLines(rules.domains);
+  const host = await getActiveTabHost(tabId);
+
+  if (!host) {
+    await updateActionIcon("active");
+    return;
+  }
+
+  const usesProxy = wouldUseProxyForHost(host, rules, patterns);
+  await updateActionIcon(usesProxy ? "active" : "bypassed");
 }
 
 async function restoreSession() {
@@ -376,17 +597,39 @@ async function restoreSession() {
   if (activeId) {
     const proxy = proxies.find((p) => p.id === activeId) || null;
     await applyProxy(proxy);
-    await updateActionIcon(Boolean(proxy));
+    await syncActionIcon();
   } else {
     await applyProxy(null);
-    await updateActionIcon(false);
+    await updateActionIcon("inactive");
   }
 }
 
 async function syncIconFromStorage() {
-  const activeId = await getActiveId();
-  await updateActionIcon(Boolean(activeId));
+  await syncActionIcon();
 }
+
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  syncActionIcon(activeInfo.tabId).catch((err) => {
+    console.warn("[OneClick Proxy] syncActionIcon onActivated failed:", err);
+  });
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!tab?.active) return;
+  if (changeInfo.url || changeInfo.status === "complete") {
+    syncActionIcon(tabId).catch((err) => {
+      console.warn("[OneClick Proxy] syncActionIcon onUpdated failed:", err);
+    });
+  }
+});
+
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId !== chrome.windows.WINDOW_ID_NONE) {
+    syncActionIcon().catch((err) => {
+      console.warn("[OneClick Proxy] syncActionIcon onFocusChanged failed:", err);
+    });
+  }
+});
 
 chrome.runtime.onStartup.addListener(restoreSession);
 chrome.runtime.onInstalled.addListener(restoreSession);
@@ -457,6 +700,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const { [STORAGE_KEY_CONFLICT]: proxyConflict = false } = await chrome.storage.local.get(
           STORAGE_KEY_CONFLICT
         );
+        syncActionIcon().catch((err) => {
+          console.warn("[OneClick Proxy] syncActionIcon on getState failed:", err);
+        });
         sendResponse({ proxies, activeId, primaryId, rules, proxyConflict });
         break;
       }
@@ -477,7 +723,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           break;
         }
         try {
-          const proxies = await addProxy(message.proxy);
+          const proxy = { ...message.proxy };
+          if (result.countryCode) {
+            proxy.countryCode = result.countryCode;
+          }
+          const proxies = await addProxy(proxy);
           sendResponse({ ok: true, proxies });
         } catch (err) {
           sendResponse({ ok: false, error: err.message });
@@ -491,7 +741,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           break;
         }
         try {
-          const proxies = await updateProxy(message.id, message.proxy);
+          const proxy = { ...message.proxy };
+          if (result.countryCode) {
+            proxy.countryCode = result.countryCode;
+          }
+          const proxies = await updateProxy(message.id, proxy);
           sendResponse({
             ok: true,
             proxies,
@@ -549,6 +803,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true, rules, applyError });
         break;
       }
+      case "resolveCountries": {
+        const proxies = await resolveMissingCountries();
+        sendResponse({ ok: true, proxies });
+        break;
+      }
+      case "pingProxy": {
+        const proxies = await getProxies();
+        const proxy = proxies.find((p) => p.id === message.id) || null;
+        if (!proxy) {
+          sendResponse({ ok: false, error: "Proxy not found" });
+          break;
+        }
+        await restoreRealProxyState();
+        sendResponse(await measureProxyLatency(proxy));
+        break;
+      }
+      case "pingAllProxies": {
+        sendResponse({ ok: true, results: await pingAllProxiesDirect() });
+        break;
+      }
       case "exportData": {
         const proxies = await getProxies();
         const rules = await getRules();
@@ -573,6 +847,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           username: String(p.username || ""),
           password: String(p.password || ""),
           name: String(p.name || p.host || ""),
+          countryCode: p.countryCode ? String(p.countryCode).toUpperCase() : "",
         })).filter((p) => p.host);
 
         const seen = new Set();

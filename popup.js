@@ -1,7 +1,11 @@
 // --- Элементы ---
 const screens = document.querySelectorAll(".screen");
 const powerBtn = document.getElementById("powerBtn");
-const homeTitle = document.getElementById("homeTitle");
+const homeOff = document.getElementById("homeOff");
+const homeOn = document.getElementById("homeOn");
+const homeFallback = document.getElementById("homeFallback");
+const homeFlag = document.getElementById("homeFlag");
+const homeCountry = document.getElementById("homeCountry");
 const conflictBanner = document.getElementById("conflictBanner");
 const dismissConflictBtn = document.getElementById("dismissConflictBtn");
 const errorScreenText = document.getElementById("errorScreenText");
@@ -12,7 +16,12 @@ const backFromSettingsBtn = document.getElementById("backFromSettingsBtn");
 const openAddBtn = document.getElementById("openAddBtn");
 const openAddFromSettingsBtn = document.getElementById("openAddFromSettingsBtn");
 const backFromAddBtn = document.getElementById("backFromAddBtn");
+const copyProxyBtn = document.getElementById("copyProxyBtn");
+const pasteProxyBtn = document.getElementById("pasteProxyBtn");
+const clipActionsEl = document.getElementById("clipActions");
+const clipSuccessIcon = document.getElementById("clipSuccessIcon");
 const openRulesBtn = document.getElementById("openRulesBtn");
+const refreshPingBtn = document.getElementById("refreshPingBtn");
 const backFromRulesBtn = document.getElementById("backFromRulesBtn");
 const exportBtn = document.getElementById("exportBtn");
 const importBtn = document.getElementById("importBtn");
@@ -31,8 +40,10 @@ const addScreenTitle = document.getElementById("addScreenTitle");
 const inputEl = document.getElementById("proxyInput");
 const addBtn = document.getElementById("addBtn");
 const btnLabel = addBtn.querySelector(".btn__label");
+const btnSuccessEl = document.getElementById("addBtnSuccess");
 const spinnerEl = document.getElementById("spinner");
-const errorEl = document.getElementById("inputError");
+const inputHint = document.getElementById("inputHint");
+const DEFAULT_INPUT_HINT = "Tests the proxy before saving";
 
 const modal = document.getElementById("modal");
 const modalText = document.getElementById("modalText");
@@ -49,6 +60,212 @@ let state = {
 let rulesMode = "bypass";
 let editingId = null;
 let addReturnScreen = "home";
+let clipSuccessTimer = null;
+let clipSuccessBtn = null;
+let resolvingCountries = false;
+let countriesResolveAttempted = false;
+let pinging = false;
+const pingResults = new Map();
+
+function getFlagUrl(countryCode) {
+  const code = String(countryCode || "").toLowerCase();
+  if (!/^[a-z]{2}$/.test(code)) return "";
+  return `https://cdn.jsdelivr.net/npm/flag-icons@7.5.0/flags/1x1/${code}.svg`;
+}
+
+function getCountryName(countryCode) {
+  const code = String(countryCode || "").toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return "";
+  try {
+    return new Intl.DisplayNames(["en"], { type: "region" }).of(code) || code;
+  } catch {
+    return code;
+  }
+}
+
+function getPingTier(ms) {
+  if (ms <= 150) return "good";
+  if (ms <= 300) return "fair";
+  return "slow";
+}
+
+function updateItemMeta(itemOrId) {
+  const item =
+    typeof itemOrId === "string"
+      ? listEl.querySelector(`.item[data-id="${itemOrId}"]`)
+      : itemOrId;
+  if (!item) return;
+
+  const meta = item.querySelector(".item__meta");
+  const ping = item.querySelector(".item__ping");
+  const badge = item.querySelector(".badge--https");
+  if (!meta) return;
+
+  const showMeta =
+    (ping && !ping.classList.contains("hidden")) ||
+    (badge && !badge.classList.contains("hidden"));
+  meta.classList.toggle("hidden", !showMeta);
+}
+
+function setItemPingEl(pingEl, result) {
+  pingEl.classList.remove("item__ping--good", "item__ping--fair", "item__ping--slow", "item__ping--loading", "item__ping--fail");
+
+  if (!result) {
+    pingEl.classList.add("hidden");
+    pingEl.textContent = "";
+    return;
+  }
+
+  pingEl.classList.remove("hidden");
+
+  if (result?.loading) {
+    pingEl.textContent = "…";
+    pingEl.classList.add("item__ping--loading");
+    return;
+  }
+
+  if (!result?.ok || result.latencyMs == null) {
+    pingEl.textContent = "—";
+    pingEl.classList.add("item__ping--fail");
+    return;
+  }
+
+  const tier = getPingTier(result.latencyMs);
+  pingEl.textContent = `${result.latencyMs} ms`;
+  pingEl.classList.add(`item__ping--${tier}`);
+}
+
+function updateItemPing(id, result) {
+  if (result) {
+    pingResults.set(id, result);
+  } else {
+    pingResults.delete(id);
+  }
+
+  const item = listEl.querySelector(`.item[data-id="${id}"]`);
+  if (!item) return;
+  const pingEl = item.querySelector(".item__ping");
+  if (pingEl) setItemPingEl(pingEl, result);
+  updateItemMeta(item);
+}
+
+function markAllPingsLoading() {
+  for (const proxy of state.proxies) {
+    updateItemPing(proxy.id, { loading: true });
+  }
+}
+
+async function pingProxyById(id) {
+  updateItemPing(id, { loading: true });
+  try {
+    const res = await sendMessage({ type: "pingProxy", id });
+    updateItemPing(id, res);
+  } catch {
+    updateItemPing(id, { ok: false });
+  }
+}
+
+async function pingAllProxies() {
+  if (pinging || state.proxies.length === 0) return;
+
+  pinging = true;
+  refreshPingBtn.disabled = true;
+  refreshPingBtn.classList.add("is-spinning");
+  markAllPingsLoading();
+
+  try {
+    const res = await sendMessage({ type: "pingAllProxies" });
+    if (res?.results) {
+      for (const result of res.results) {
+        updateItemPing(result.id, result);
+      }
+    }
+  } finally {
+    pinging = false;
+    refreshPingBtn.disabled = false;
+    refreshPingBtn.classList.remove("is-spinning");
+  }
+}
+
+function applyStoredPing(id, pingEl) {
+  const stored = pingResults.get(id);
+  if (stored) {
+    setItemPingEl(pingEl, stored);
+  } else {
+    pingEl.classList.add("hidden");
+  }
+}
+
+function getActiveProxy() {
+  return state.proxies.find((proxy) => proxy.id === state.activeId) || null;
+}
+
+function setItemFlag(node, countryCode) {
+  const wrapEl = node.querySelector(".item__flag-wrap");
+  const flagEl = node.querySelector(".item__flag");
+  const code = String(countryCode || "").toUpperCase();
+  const flagUrl = getFlagUrl(code);
+  if (flagUrl) {
+    flagEl.src = flagUrl;
+    flagEl.alt = code;
+    wrapEl.classList.remove("hidden");
+  } else {
+    flagEl.removeAttribute("src");
+    flagEl.alt = "";
+    wrapEl.classList.add("hidden");
+  }
+}
+
+async function resolveCountriesIfNeeded() {
+  if (countriesResolveAttempted || resolvingCountries) return;
+  if (!state.proxies.some((proxy) => !proxy.countryCode)) return;
+
+  countriesResolveAttempted = true;
+  resolvingCountries = true;
+  try {
+    const res = await sendMessage({ type: "resolveCountries" });
+    if (res?.ok && res.proxies) {
+      state.proxies = res.proxies;
+      renderList();
+    }
+  } finally {
+    resolvingCountries = false;
+  }
+}
+
+function clearClipSuccess() {
+  if (clipSuccessTimer) {
+    clearTimeout(clipSuccessTimer);
+    clipSuccessTimer = null;
+  }
+  if (clipSuccessBtn) {
+    clipSuccessBtn.classList.remove("is-faded");
+    clipSuccessBtn = null;
+  }
+  clipSuccessIcon.classList.remove("is-visible");
+}
+
+function showIconSuccess(btn, ms = 3000) {
+  clearClipSuccess();
+
+  const btnLeft = btn.offsetLeft;
+  clipSuccessIcon.style.left = `${btnLeft}px`;
+  clipSuccessBtn = btn;
+
+  btn.classList.add("is-faded");
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      clipSuccessIcon.classList.add("is-visible");
+    });
+  });
+
+  clipSuccessTimer = setTimeout(() => {
+    clipSuccessIcon.classList.remove("is-visible");
+    btn.classList.remove("is-faded");
+    clipSuccessTimer = null;
+    clipSuccessBtn = null;
+  }, ms);
+}
 
 function sendMessage(message) {
   return new Promise((resolve, reject) => {
@@ -96,32 +313,89 @@ function proxyToUrl(proxy) {
   return `${proxy.scheme}://${auth}${proxy.host}:${proxy.port}`;
 }
 
-function parseProxyString(raw) {
-  let url;
+function decodeCredential(value) {
   try {
-    url = new URL(raw.trim());
+    return decodeURIComponent(value);
   } catch {
+    return value;
+  }
+}
+
+function parseProxyString(raw) {
+  const trimmed = raw.trim();
+  const schemeMatch = trimmed.match(/^(https?):\/\//i);
+  if (!schemeMatch) {
     throw new Error("Could not parse string. Format: scheme://user:pass@host:port");
   }
 
-  const scheme = url.protocol.replace(":", "");
+  const scheme = schemeMatch[1].toLowerCase();
   if (scheme !== "http" && scheme !== "https") {
     throw new Error("Only http and https schemes are supported");
   }
-  if (!url.hostname) {
+
+  const rest = trimmed.slice(schemeMatch[0].length);
+  // user:pass@host:port — @ separates credentials from host
+  const withAuth = rest.match(/^(.+)@([^@/]+):(\d+)$/);
+  const withoutAuth = rest.match(/^([^@/]+):(\d+)$/);
+
+  let userinfo = "";
+  let host = "";
+  let port = 0;
+
+  if (withAuth) {
+    userinfo = withAuth[1];
+    host = withAuth[2];
+    port = parseInt(withAuth[3], 10);
+  } else if (withoutAuth) {
+    host = withoutAuth[1];
+    port = parseInt(withoutAuth[2], 10);
+  } else {
+    throw new Error("Could not parse string. Format: scheme://user:pass@host:port");
+  }
+  if (!host || !Number.isFinite(port)) {
     throw new Error("Host is required");
   }
-  const port = url.port ? parseInt(url.port, 10) : scheme === "https" ? 443 : 80;
+
+  let username = "";
+  let password = "";
+  const colonIndex = userinfo.indexOf(":");
+  if (colonIndex === -1) {
+    username = decodeCredential(userinfo);
+  } else {
+    username = decodeCredential(userinfo.slice(0, colonIndex));
+    password = decodeCredential(userinfo.slice(colonIndex + 1));
+  }
 
   return {
     id: crypto.randomUUID(),
     scheme,
-    host: url.hostname,
+    host,
     port,
-    username: decodeURIComponent(url.username || ""),
-    password: decodeURIComponent(url.password || ""),
-    name: url.hostname,
+    username,
+    password,
+    name: host,
   };
+}
+
+function isValidProxyString(raw) {
+  try {
+    parseProxyString(raw);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function tryAutofillFromClipboard() {
+  if (editingId || inputEl.value.trim()) return;
+  try {
+    const text = (await navigator.clipboard.readText()).trim();
+    if (!isValidProxyString(text)) return;
+    inputEl.value = text;
+    clearInputHint();
+  } catch {
+    // Clipboard unavailable or access denied — ignore silently.
+  }
 }
 
 function renderConflictBanner() {
@@ -131,8 +405,47 @@ function renderConflictBanner() {
 function renderHome() {
   const on = Boolean(state.activeId);
   powerBtn.classList.toggle("on", on);
-  homeTitle.textContent = on ? "Connected" : "Off";
   renderConflictBanner();
+
+  if (!on) {
+    homeOff.classList.remove("hidden");
+    homeOn.classList.add("hidden");
+    homeFallback.classList.add("hidden");
+    return;
+  }
+
+  homeOff.classList.add("hidden");
+  const proxy = getActiveProxy();
+  const code = String(proxy?.countryCode || "").toUpperCase();
+  const flagUrl = getFlagUrl(code);
+  const countryName = getCountryName(code);
+
+  if (flagUrl && countryName) {
+    homeFlag.src = flagUrl;
+    homeFlag.alt = code;
+    homeCountry.textContent = countryName;
+    homeOn.classList.remove("hidden");
+    homeFallback.classList.add("hidden");
+    return;
+  }
+
+  homeOn.classList.add("hidden");
+  homeFallback.classList.remove("hidden");
+  ensureActiveProxyCountry();
+}
+
+async function ensureActiveProxyCountry() {
+  const proxy = getActiveProxy();
+  if (!proxy || proxy.countryCode || !state.activeId) return;
+  try {
+    const res = await sendMessage({ type: "resolveCountries" });
+    if (res?.ok && res.proxies) {
+      state.proxies = res.proxies;
+      renderHome();
+    }
+  } catch {
+    // keep fallback label
+  }
 }
 
 async function handlePowerClick() {
@@ -153,8 +466,7 @@ async function handlePowerClick() {
     return;
   }
   if (!state.primaryId) {
-    switchScreen("settings");
-    renderList();
+    openSettingsScreen();
     return;
   }
 
@@ -162,8 +474,7 @@ async function handlePowerClick() {
   try {
     const res = await sendMessage({ type: "togglePower", on: true });
     if (res.error === "no-primary") {
-      switchScreen("settings");
-      renderList();
+      openSettingsScreen();
       return;
     }
     if (res.error === "empty-whitelist") {
@@ -211,11 +522,13 @@ function renderList() {
         id: proxy.id,
         name: proxy.host,
         https: proxy.scheme === "https",
-        full: proxyToUrl(proxy),
+        countryCode: proxy.countryCode,
         proxy,
       })
     );
   }
+
+  resolveCountriesIfNeeded();
 }
 
 function updateListSelection() {
@@ -224,19 +537,22 @@ function updateListSelection() {
   });
 }
 
-function buildItem({ id, name, https, full, proxy }) {
+function buildItem({ id, name, https, countryCode, proxy }) {
   const node = itemTemplate.content.cloneNode(true);
   const item = node.querySelector(".item");
   item.dataset.id = id;
   item.classList.toggle("active", state.primaryId === id);
 
   const selectBtn = node.querySelector(".item__select");
-  selectBtn.title = full;
   node.querySelector(".item__name").textContent = name;
+  setItemFlag(node, countryCode);
 
   if (https) {
     node.querySelector(".badge--https").classList.remove("hidden");
   }
+
+  applyStoredPing(id, node.querySelector(".item__ping"));
+  updateItemMeta(item);
 
   selectBtn.addEventListener("click", async () => {
     if (state.primaryId === id) return;
@@ -266,6 +582,7 @@ function buildItem({ id, name, https, full, proxy }) {
       state.proxies = res.proxies;
       state.activeId = res.activeId;
       state.primaryId = res.primaryId;
+      pingResults.delete(id);
       await animateRemove(el);
       renderList();
       renderHome();
@@ -294,33 +611,65 @@ function animateRemove(el) {
   });
 }
 
+function clearAddSuccess() {
+  addBtn.classList.remove("is-success");
+  btnSuccessEl.classList.add("hidden");
+  btnLabel.classList.remove("hidden");
+  addBtn.disabled = false;
+}
+
+function showAddSuccess(ms = 3000) {
+  return new Promise((resolve) => {
+    spinnerEl.classList.add("hidden");
+    btnLabel.classList.add("hidden");
+    btnSuccessEl.classList.remove("hidden");
+    addBtn.disabled = true;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => addBtn.classList.add("is-success"));
+    });
+    setTimeout(() => {
+      clearAddSuccess();
+      resolve();
+    }, ms);
+  });
+}
 function setLoading(loading) {
   addBtn.disabled = loading;
   inputEl.disabled = loading;
+  copyProxyBtn.disabled = loading;
+  pasteProxyBtn.disabled = loading;
   btnLabel.classList.toggle("hidden", loading);
   spinnerEl.classList.toggle("hidden", !loading);
 }
 
+function clearInputHint() {
+  inputHint.textContent = DEFAULT_INPUT_HINT;
+  inputHint.classList.remove("form-hint--error", "shake");
+}
+
 function showInputError(msg) {
-  errorEl.textContent = msg;
-  errorEl.classList.remove("hidden");
-  errorEl.classList.remove("shake");
-  void errorEl.offsetWidth;
-  errorEl.classList.add("shake");
+  inputHint.textContent = msg;
+  inputHint.classList.add("form-hint--error");
+  inputHint.classList.remove("shake");
+  void inputHint.offsetWidth;
+  inputHint.classList.add("shake");
 }
 
 function resetAddForm() {
   inputEl.value = "";
-  errorEl.classList.add("hidden");
+  clearInputHint();
   editingId = null;
   addScreenTitle.textContent = "New proxy";
   btnLabel.textContent = "Test & add";
+  clearClipSuccess();
+  clearAddSuccess();
 }
 
 function openAddScreen(returnScreen = "home") {
   resetAddForm();
   addReturnScreen = returnScreen;
   switchScreen("add");
+  tryAutofillFromClipboard();
 }
 
 function openEditScreen(proxy) {
@@ -329,12 +678,12 @@ function openEditScreen(proxy) {
   addScreenTitle.textContent = "Edit proxy";
   btnLabel.textContent = "Test & save";
   inputEl.value = proxyToUrl(proxy);
-  errorEl.classList.add("hidden");
+  clearInputHint();
   switchScreen("add");
 }
 
 async function handleSaveProxy() {
-  errorEl.classList.add("hidden");
+  clearInputHint();
   const raw = inputEl.value;
   if (!raw.trim()) return;
 
@@ -361,27 +710,34 @@ async function handleSaveProxy() {
 
     if (!res.ok) {
       showInputError(res.error || "Proxy unavailable");
+      setLoading(false);
+      btnLabel.textContent = isEditing ? "Test & save" : "Test & add";
       return;
     }
 
-    if (editingId) {
+    const savedId = editingId || proxy.id;
+    const goSettings = Boolean(editingId);
+    if (goSettings) {
       state.proxies = res.proxies;
       state.activeId = res.activeId;
       state.primaryId = res.primaryId;
-      resetAddForm();
-      renderList();
-      renderHome();
-      switchScreen("settings");
-      return;
+    } else {
+      state = await sendMessage({ type: "getState" });
     }
 
-    const fresh = await sendMessage({ type: "getState" });
-    state = fresh;
+    inputEl.disabled = false;
+    copyProxyBtn.disabled = false;
+    pasteProxyBtn.disabled = false;
+    await showAddSuccess();
+
     resetAddForm();
     renderList();
     renderHome();
-    switchScreen("home");
-  } finally {
+    switchScreen(goSettings ? "settings" : "home");
+    if (savedId && !pinging) {
+      pingProxyById(savedId);
+    }
+  } catch {
     setLoading(false);
     btnLabel.textContent = isEditing ? "Test & save" : "Test & add";
   }
@@ -395,6 +751,31 @@ inputEl.addEventListener("keydown", (e) => {
 backFromAddBtn.addEventListener("click", () => {
   resetAddForm();
   switchScreen(addReturnScreen);
+});
+
+copyProxyBtn.addEventListener("click", async () => {
+  const text = inputEl.value.trim();
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    clearInputHint();
+    showIconSuccess(copyProxyBtn);
+  } catch {
+    showInputError("Could not copy to clipboard");
+  }
+});
+
+pasteProxyBtn.addEventListener("click", async () => {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (!text.trim()) return;
+    inputEl.value = text.trim();
+    clearInputHint();
+    inputEl.focus();
+    showIconSuccess(pasteProxyBtn);
+  } catch {
+    showInputError("Could not paste from clipboard");
+  }
 });
 
 exportBtn.addEventListener("click", async () => {
@@ -432,17 +813,24 @@ importFile.addEventListener("change", async () => {
     state.activeId = res.activeId;
     state.primaryId = res.primaryId;
     state.rules = res.rules;
-    renderList();
     renderHome();
-    switchScreen("settings");
+    openSettingsScreen();
   } catch (err) {
     await showConfirm(err.message || "Failed to import file", "OK", "accent");
   }
 });
 
-openSettingsBtn.addEventListener("click", () => {
+async function openSettingsScreen() {
   switchScreen("settings");
   renderList();
+  pingResults.clear();
+  pingAllProxies();
+}
+
+openSettingsBtn.addEventListener("click", () => openSettingsScreen());
+refreshPingBtn.addEventListener("click", () => {
+  pingResults.clear();
+  pingAllProxies();
 });
 backFromSettingsBtn.addEventListener("click", () => switchScreen("home"));
 

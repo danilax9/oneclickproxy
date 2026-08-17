@@ -2,9 +2,9 @@
   "manifest_version": 3,
   "name": "OneClick Proxy",
   "short_name": "OneClick",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Fast HTTP/HTTPS proxy switching with authentication",
-  "permissions": ["proxy", "storage", "webRequest", "webRequestAuthProvider"],
+  "permissions": ["proxy", "storage", "webRequest", "webRequestAuthProvider", "clipboardRead", "tabs"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"

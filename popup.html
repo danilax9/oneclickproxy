@@ -2,11 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="color-scheme" content="light" />
+<meta name="color-scheme" content="light dark" />
 <title>OneClick Proxy</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
@@ -33,6 +30,18 @@
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
+
+      <div class="topbar__status">
+        <div class="home__title" id="homeOff">Off</div>
+        <div class="home__title home__title--on hidden" id="homeOn">
+          <span class="home__flag-wrap flag-badge">
+            <img class="home__flag" id="homeFlag" alt="" />
+          </span>
+          <span class="home__country" id="homeCountry"></span>
+        </div>
+        <div class="home__title home__title--fallback hidden" id="homeFallback">Connected</div>
+      </div>
+
       <button class="icon-btn icon-btn--ghost" id="openAddBtn" title="Add proxy">
         <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
           <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -47,10 +56,6 @@
           <path d="M6.5 6.5a8 8 0 1 0 11 0" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
         </svg>
       </button>
-
-      <div class="home__status">
-        <div class="home__title" id="homeTitle">Off</div>
-      </div>
     </div>
   </section>
 
@@ -63,32 +68,44 @@
         </svg>
       </button>
       <h2>Proxies</h2>
-      <button class="icon-btn icon-btn--ghost" id="openAddFromSettingsBtn" title="Add proxy">
-        <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
-          <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-        </svg>
-      </button>
+      <div class="subheader__actions">
+        <button class="icon-btn icon-btn--ghost" id="refreshPingBtn" type="button" title="Refresh ping">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M20 12a8 8 0 1 1-2.05-5.32" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M20 4v5h-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <button class="icon-btn icon-btn--ghost" id="openRulesBtn" type="button" title="Routing rules">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 6h16M4 12h10M4 18h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button class="icon-btn icon-btn--ghost" id="exportBtn" type="button" title="Export">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 4v10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M8.5 10.5 12 14l3.5-3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M5 18h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button class="icon-btn icon-btn--ghost" id="importBtn" type="button" title="Import">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 20V10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M8.5 13.5 12 10l3.5 3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M5 6h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button class="icon-btn icon-btn--ghost" id="openAddFromSettingsBtn" title="Add proxy">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
+            <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <input type="file" id="importFile" accept=".json,application/json" hidden />
+      </div>
     </div>
 
     <div class="settings-body">
       <div class="list-group">
         <div class="list" id="list"></div>
-      </div>
-
-      <button class="settings-row" type="button" id="openRulesBtn">
-        <svg class="settings-row__icon" width="16" height="16" viewBox="0 0 24 24" fill="none">
-          <path d="M4 6h16M4 12h10M4 18h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-        </svg>
-        <span class="settings-row__label">Routing rules</span>
-        <svg class="settings-row__chevron" width="14" height="14" viewBox="0 0 24 24" fill="none">
-          <path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </button>
-
-      <div class="settings-actions">
-        <button class="settings-row settings-row--half" type="button" id="exportBtn">Export</button>
-        <button class="settings-row settings-row--half" type="button" id="importBtn">Import</button>
-        <input type="file" id="importFile" accept=".json,application/json" hidden />
       </div>
     </div>
   </section>
@@ -139,7 +156,25 @@
         </svg>
       </button>
       <h2 id="addScreenTitle">New proxy</h2>
-      <span class="subheader__spacer"></span>
+      <div class="subheader__actions" id="clipActions">
+        <button class="icon-btn icon-btn--ghost" id="copyProxyBtn" type="button" title="Copy">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M7 15H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button class="icon-btn icon-btn--ghost" id="pasteProxyBtn" type="button" title="Paste">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            <rect x="9" y="3" width="6" height="4" rx="1" stroke="currentColor" stroke-width="1.8"/>
+          </svg>
+        </button>
+        <span class="subheader__success" id="clipSuccessIcon" aria-hidden="true">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+            <path d="M5 12.5l4.5 4.5L19 7.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+      </div>
     </div>
 
     <div class="add-form">
@@ -151,11 +186,15 @@
         autocomplete="off"
         spellcheck="false"
       />
-      <p class="form-hint">Basic connectivity check · stored locally</p>
-      <div id="inputError" class="error hidden"></div>
+      <p class="form-hint" id="inputHint">Tests the proxy before saving</p>
 
       <button id="addBtn" class="btn btn--accent btn--block">
         <span class="btn__label">Test & add</span>
+        <span class="btn__success hidden" id="addBtnSuccess" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <path d="M5 12.5l4.5 4.5L19 7.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
         <span class="spinner hidden" id="spinner"></span>
       </button>
     </div>
@@ -175,10 +214,18 @@
 
 <template id="proxyItemTemplate">
   <div class="item" data-id="">
-    <button class="item__select" title="">
+    <button class="item__select" type="button">
       <span class="item__label">
-        <span class="item__name"></span>
-        <span class="badge badge--https hidden">HTTPS</span>
+        <span class="item__flag-wrap flag-badge hidden">
+          <img class="item__flag" alt="" />
+        </span>
+        <span class="item__body">
+          <span class="item__name"></span>
+          <span class="item__meta hidden">
+            <span class="item__ping hidden"></span>
+            <span class="badge badge--https hidden">HTTPS</span>
+          </span>
+        </span>
       </span>
     </button>
     <div class="item__actions">
