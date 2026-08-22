@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "OneClick Proxy",
   "short_name": "OneClick",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "minimum_chrome_version": "116",
   "description": "Switch HTTP/HTTPS proxies in one click. Auth, routing rules, ping, and credentials stored only on this device.",
   "homepage_url": "https://github.com/danilax9/oneclickproxy",
